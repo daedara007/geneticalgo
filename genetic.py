@@ -17,7 +17,7 @@ MATA_KULIAH = {
     "Agama Kristen": {"sks": 2, "semester": 3},
     "Agama Katolik": {"sks": 2, "semester": 3},
     "Agama Buddha": {"sks": 2, "semester": 3},
-    "Aljabar Liner dan Geometri": {"sks": 3, "semester": 2},
+    "Aljabar Linier dan Geometri": {"sks": 3, "semester": 2},
     "Arsitektur Komputer": {"sks": 3, "semester": 3},
     "Pancasila": {"sks": 2, "semester": 3},
     "Pengantar Kecerdasan Artifisial": {"sks": 3, "semester": 3},
