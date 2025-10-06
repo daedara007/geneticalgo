@@ -140,182 +140,148 @@ RUANGAN = [
     'E301', 'E302', 'E303', 'E304', 'E305', 'E306'
 ]
 
-# Built helpers
-SLOT_LIST = list(WAKTU_SLOT.values())  # [1,2,3,4]
-SLOT_TO_TIME = {v: k for k, v in WAKTU_SLOT.items()}  # reverse mapping
+# Prepare data
+mata_kuliah = list(MATA_KULIAH.keys())
+sks_dict = {mk: MATA_KULIAH[mk]['sks'] for mk in mata_kuliah}
+slots = list(set(WAKTU_SLOT.values()))  # [1,2,3,4]
+ruangs = RUANGAN
 
-# sanitize pengajar lists (hapus empty strings)
-for k, lst in list(PENGAJAR_MATKUL.items()):
-    PENGAJAR_MATKUL[k] = [p.strip() for p in lst if isinstance(p, str) and p.strip()]
+# Dosen options, filter empty and add dummy for missing matkul
+dosen_options = {}
+for mk in mata_kuliah:
+    dosens = [d for d in PENGAJAR_MATKUL.get(mk, []) if d.strip()]
+    if not dosens:
+        dosens = [f"Dosen Dummy for {mk}"]  # Dummy if missing
+    dosen_options[mk] = dosens
 
-# For mata kuliah without pengajar list, allow placeholder 'TBD' or None
-def possible_instructors(matkul):
-    if matkul in PENGAJAR_MATKUL and PENGAJAR_MATKUL[matkul]:
-        return PENGAJAR_MATKUL[matkul]
-    # fallback: pick all lecturers from provided dict (less ideal) or 'TBD'
-    # we'll return ['TBD'] to avoid giving wrong instructors
-    return ['TBD']
+# Genetic Algorithm Parameters
+POPULATION_SIZE = 100
+GENERATIONS = 200
+MUTATION_RATE = 0.1
+CROSSOVER_RATE = 0.7
+TOURNAMENT_SIZE = 5
 
-# ---------------------------
-# GA Implementation
-# ---------------------------
-random.seed(42)
+# Individual representation: dict {matkul: (slot, ruang, dosen)}
+def create_individual():
+    individual = {}
+    for mk in mata_kuliah:
+        slot = random.choice(slots)
+        ruang = random.choice(ruangs)
+        dosen = random.choice(dosen_options[mk])
+        individual[mk] = (slot, ruang, dosen)
+    return individual
 
-def random_individual():
-    """Buat satu kromosom: dict matkul -> (slot, ruangan, pengajar)"""
-    indiv = {}
-    for matkul, info in MATA_KULIAH.items():
-        slot = random.choice(SLOT_LIST)
-        ruang = random.choice(RUANGAN)
-        instrs = possible_instructors(matkul)
-        pengajar = random.choice(instrs)
-        indiv[matkul] = (slot, ruang, pengajar)
-    return indiv
-
-def fitness(indiv, penalties=None):
-    """
-    Hitung fitness sebagai negative total penalty (semakin besar fitness -> lebih baik).
-    penalties: dict custom penalty weights (optional).
-    """
-    if penalties is None:
-        penalties = {
-            'room_conflict': 100,   # per pair conflict in same room&slot
-            'instructor_conflict': 100, # per pair instructor conflict same slot
-            'heavy_in_bad_slot': 10, # per course with sks>=3 in slot 2 or 4
-        }
-    total_penalty = 0
-
-    # 1) room conflicts: for each slot+room count how many matkul, pairs = n*(n-1)/2
-    slot_room_map = defaultdict(list)
-    for matkul, (slot, ruang, _) in indiv.items():
-        slot_room_map[(slot, ruang)].append(matkul)
-    for key, lst in slot_room_map.items():
-        n = len(lst)
-        if n > 1:
-            total_penalty += penalties['room_conflict'] * (n * (n - 1) // 2)
-
-    # 2) instructor conflicts: for each instructor and slot, count how many
-    instr_slot_map = defaultdict(list)
-    for matkul, (slot, _, pengajar) in indiv.items():
-        instr_slot_map[(pengajar, slot)].append(matkul)
-    for key, lst in instr_slot_map.items():
-        n = len(lst)
-        if n > 1:
-            total_penalty += penalties['instructor_conflict'] * (n * (n - 1) // 2)
-
-    # 3) heavy courses (sks >= 3) in slot 2 or 4
-    for matkul, (slot, _, _) in indiv.items():
-        sks = MATA_KULIAH[matkul]['sks']
-        if sks >= 3 and slot in (2, 4):
-            total_penalty += penalties['heavy_in_bad_slot']
-
-    # Return fitness (higher is better)
-    return -total_penalty, total_penalty
-
-# GA operators
-def tournament_selection(pop, k=3):
-    """k-tournament selection (return a copy)"""
-    selected = random.sample(pop, k)
-    selected.sort(key=lambda x: x['fitness'], reverse=True)  # fitness higher = better
-    return copy.deepcopy(selected[0]['indiv'])
-
-def crossover(parent1, parent2, cx_prob=0.5):
-    """Uniform-style crossover: for each matkul, swap with prob cx_prob"""
-    child1 = {}
-    child2 = {}
-    for matkul in MATA_KULIAH.keys():
-        if random.random() < cx_prob:
-            child1[matkul] = copy.deepcopy(parent2[matkul])
-            child2[matkul] = copy.deepcopy(parent1[matkul])
+# Fitness function: negative penalty (higher is better)
+def fitness(individual):
+    penalty = 0
+    
+    # Room clashes: same slot and same ruang
+    slot_room_usage = {}
+    for mk, (slot, ruang, dosen) in individual.items():
+        key = (slot, ruang)
+        if key in slot_room_usage:
+            penalty += 10  # Penalty for room clash
         else:
-            child1[matkul] = copy.deepcopy(parent1[matkul])
-            child2[matkul] = copy.deepcopy(parent2[matkul])
+            slot_room_usage[key] = mk
+    
+    # Dosen clashes: same slot and same dosen
+    slot_dosen_usage = {}
+    for mk, (slot, ruang, dosen) in individual.items():
+        key = (slot, dosen)
+        if key in slot_dosen_usage:
+            penalty += 10  # Penalty for dosen clash
+        else:
+            slot_dosen_usage[key] = mk
+    
+    # Penalty for matkul >=3 SKS in slot 2 or 4
+    for mk, (slot, ruang, dosen) in individual.items():
+        if sks_dict[mk] >= 3 and slot in [2, 4]:
+            penalty += 5  # Penalty for unsuitable slot
+    
+    return -penalty
+
+# Selection: Tournament selection
+def tournament_selection(population):
+    selected = []
+    for _ in range(len(population)):
+        candidates = random.sample(population, TOURNAMENT_SIZE)
+        best = max(candidates, key=fitness)
+        selected.append(copy.deepcopy(best))
+    return selected
+
+# Crossover: Single point crossover on matkul assignments
+def crossover(parent1, parent2):
+    if random.random() > CROSSOVER_RATE:
+        return copy.deepcopy(parent1), copy.deepcopy(parent2)
+    
+    child1 = copy.deepcopy(parent1)
+    child2 = copy.deepcopy(parent2)
+    
+    # Choose a crossover point
+    crossover_point = random.randint(1, len(mata_kuliah) - 1)
+    mk_list = list(mata_kuliah)
+    
+    for i in range(crossover_point, len(mk_list)):
+        mk = mk_list[i]
+        child1[mk], child2[mk] = child2[mk], child1[mk]
+    
     return child1, child2
 
-def mutate(indiv, mut_prob=0.1):
-    """Mutasi: untuk tiap matkul, dengan prob mut_prob ubah slot/ruang/pengajar salah satu"""
-    new_indiv = copy.deepcopy(indiv)
-    for matkul in MATA_KULIAH.keys():
-        if random.random() < mut_prob:
-            # choose which attribute to mutate
-            attr = random.choice(['slot', 'ruang', 'pengajar'])
-            slot, ruang, pengajar = new_indiv[matkul]
-            if attr == 'slot':
-                new_indiv[matkul] = (random.choice(SLOT_LIST), ruang, pengajar)
-            elif attr == 'ruang':
-                new_indiv[matkul] = (slot, random.choice(RUANGAN), pengajar)
-            else:  # pengajar
-                instrs = possible_instructors(matkul)
-                new_indiv[matkul] = (slot, ruang, random.choice(instrs))
-    return new_indiv
+# Mutation: Randomly change slot, ruang, or dosen for a matkul
+def mutate(individual):
+    for mk in mata_kuliah:
+        if random.random() < MUTATION_RATE:
+            # Randomly mutate one part
+            mutation_type = random.choice(['slot', 'ruang', 'dosen'])
+            if mutation_type == 'slot':
+                new_slot = random.choice(slots)
+                slot, ruang, dosen = individual[mk]
+                individual[mk] = (new_slot, ruang, dosen)
+            elif mutation_type == 'ruang':
+                new_ruang = random.choice(ruangs)
+                slot, ruang, dosen = individual[mk]
+                individual[mk] = (slot, new_ruang, dosen)
+            elif mutation_type == 'dosen':
+                new_dosen = random.choice(dosen_options[mk])
+                slot, ruang, dosen = individual[mk]
+                individual[mk] = (slot, ruang, new_dosen)
+    return individual
 
-# Main GA runner
-def run_ga(pop_size=100, generations=200, cx_prob=0.6, mut_prob=0.08, verbose=True):
-    # init population
-    population = []
-    for _ in range(pop_size):
-        indiv = random_individual()
-        fit, pen = fitness(indiv)
-        population.append({'indiv': indiv, 'fitness': fit, 'penalty': pen})
-    # evolve
-    best_history = []
-    for gen in range(1, generations + 1):
-        new_pop = []
-        # elitism: keep best 2
-        population.sort(key=lambda x: x['fitness'], reverse=True)
-        elites = population[:2]
-        new_pop.extend(copy.deepcopy(elites))
+# Main GA loop
+def genetic_algorithm():
+    # Initialize population
+    population = [create_individual() for _ in range(POPULATION_SIZE)]
+    
+    for generation in range(GENERATIONS):
+        # Selection
+        selected = tournament_selection(population)
+        
+        # New population
+        new_population = []
+        for i in range(0, len(selected), 2):
+            parent1 = selected[i]
+            parent2 = selected[i+1] if i+1 < len(selected) else selected[0]
+            child1, child2 = crossover(parent1, parent2)
+            new_population.append(mutate(child1))
+            new_population.append(mutate(child2))
+        
+        population = new_population[:POPULATION_SIZE]
+        
+        # Print best fitness every 50 generations
+        if generation % 50 == 0:
+            best = max(population, key=fitness)
+            print(f"Generation {generation}: Best Fitness = {fitness(best)}")
+    
+    # Return best individual
+    best_individual = max(population, key=fitness)
+    return best_individual
 
-        while len(new_pop) < pop_size:
-            p1 = tournament_selection(population, k=3)
-            p2 = tournament_selection(population, k=3)
-            c1, c2 = crossover(p1, p2, cx_prob=cx_prob)
-            c1 = mutate(c1, mut_prob)
-            c2 = mutate(c2, mut_prob)
-            f1, p1_pen = fitness(c1)
-            f2, p2_pen = fitness(c2)
-            new_pop.append({'indiv': c1, 'fitness': f1, 'penalty': p1_pen})
-            if len(new_pop) < pop_size:
-                new_pop.append({'indiv': c2, 'fitness': f2, 'penalty': p2_pen})
+# Run the GA
+best_schedule = genetic_algorithm()
 
-        population = new_pop
+# Print the best schedule
+print("\nBest Schedule:")
+for mk, (slot, ruang, dosen) in best_schedule.items():
+    print(f"{mk}: Slot {slot}, Ruang {ruang}, Dosen {dosen}")
 
-        # keep track best
-        population.sort(key=lambda x: x['fitness'], reverse=True)
-        best = population[0]
-        best_history.append((gen, best['fitness'], best['penalty']))
-        if verbose and (gen % max(1, generations//10) == 0 or gen==1 or gen==generations):
-            print(f"Gen {gen:4d} | Best fitness: {best['fitness']} | Penalty: {best['penalty']}")
-
-    # final best
-    population.sort(key=lambda x: x['fitness'], reverse=True)
-    best = population[0]
-    return best, best_history
-
-# Pretty print schedule
-def print_schedule(indiv):
-    rows = []
-    for matkul, (slot, ruang, pengajar) in indiv.items():
-        daytime = SLOT_TO_TIME.get(slot, ("", ""))
-        rows.append((slot, matkul, MATA_KULIAH[matkul]['sks'], dayTime_str(daytime), ruang, pengajar))
-    # sort by slot
-    rows.sort(key=lambda x: (x[0], x[1]))
-    print(f"{'Slot':<4} | {'Mata Kuliah':<30} | {'SKS':<3} | {'Hari/Jam':<12} | {'Ruang':<5} | {'Dosen'}")
-    print("-" * 90)
-    for r in rows:
-        print(f"{r[0]:<4} | {r[1]:<30} | {r[2]:<3} | {r[3]:<12} | {r[4]:<5} | {r[5]}")
-
-def dayTime_str(daytime):
-    if not daytime:
-        return ""
-    day, t = daytime
-    return f"{day} {t}"
-
-# ---------------------------
-# Run example
-# ---------------------------
-if __name__ == "__main__":
-    best, history = run_ga(pop_size=150, generations=300, cx_prob=0.6, mut_prob=0.08, verbose=True)
-    print("\n=== Jadwal Terbaik Ditemukan ===")
-    print(f"Fitness: {best['fitness']}  | Total penalty: {best['penalty']}")
-    print_schedule(best['indiv']) 
+print(f"Fitness: {fitness(best_schedule)}")
